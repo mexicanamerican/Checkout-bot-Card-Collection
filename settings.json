@@ -1,8 +1,0 @@
-{
-    "captcha_providers": {
-        "2captcha": "",
-        "anticaptcha": "",
-        "capmonster": "",
-        "capsolver": "YOUR_API_KEY"
-    }
-}

@@ -1,95 +1,123 @@
 # Checkout Bot Card Collection
+
 An automated bot for monitoring and purchasing collectible cards from e-commerce sites, with a specific focus on ToysCenter.it.
 
-## 📋 Overview
-This project implements an automated bot capable of:
+## Overview
 
-- Monitoring the availability of specific products
-- Automatically solving Cloudflare captchas
-- Filling forms with user data
-- Managing the payment process
-- Running multiple instances simultaneously (multi-threading)
+The bot:
 
-The bot is particularly useful for acquiring collectible cards or other limited availability products that tend to sell out quickly.
+- Polls a product page until stock is available
+- Solves Cloudflare Turnstile via CapSolver
+- Adds the product to the cart and proceeds to checkout
+- Fills the address form and submits the Adyen credit-card payment
+- Runs many tasks concurrently from a single CSV file
 
-## 🧩 Project Structure
-```plaintext
-Checkout-bot-Card-Collection/
-├── ToysCenter/
-│   ├── monitoring.py      # Product monitoring
-│   ├── user_data_compiling.py  # User form filling
-│   ├── payment.py         # Payment process management
-│   ├── pipeline.py        # Coordination of the entire process
-├── Utility/
-│   └── utils.py           # Utility functions (captcha solver, etc.)
-├── tasks/
-│   └── toyscenter.csv     # CSV file with details of products to monitor
-├── .env                   # Environment variables
-└── settings.json          # General settings
+The implementation uses **async [patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright)** (a stealth-patched Playwright fork) instead of Selenium, with proper page objects, structured logging, and validated configuration.
+
+## Demo
+
+https://github.com/user-attachments/assets/2b6ac76a-0689-4499-82f7-e26bcb2b0e95
+
+## Requirements
+
+- Python 3.10+
+- A CapSolver account (`https://capsolver.com`)
+- A Chromium build (`patchright install chromium`)
+
+## Project structure
+
+```
+checkout_bot/
+├── __main__.py              # python -m checkout_bot
+├── config/
+│   ├── settings.py          # AppSettings (loads .env)
+│   └── task.py              # TaskRow + load_tasks() for the CSV
+├── core/
+│   ├── orchestrator.py      # async runner with retry + concurrency
+│   ├── browser.py           # patchright launch helper
+│   ├── sleep_prevention.py  # macOS caffeinate / Windows wake helper
+│   └── exceptions.py        # CheckoutError hierarchy
+├── pages/
+│   ├── base_page.py         # cookies + captcha helpers
+│   ├── product_page.py      # availability poll + add to cart
+│   ├── cart_page.py         # proceed to checkout
+│   ├── checkout_form_page.py# billing form fill
+│   ├── shipping_step_page.py# shipping method selection
+│   └── payment_page.py      # Adyen iframes + confirmation
+├── services/
+│   ├── captcha_solver.py    # async CapSolver client
+│   └── province_lookup.py   # Italian province → code
+└── utils/
+    ├── logging.py           # logger + task-id context
+    └── random_data.py       # random_string / random_phone
+
+tasks/toyscenter.csv         # one row per concurrent checkout attempt
+.env                         # TOYS_CENTER_KEY + CAPSOLVER_API_KEY
+.env.example                 # template — copy to .env and fill in
 ```
 
-## 🔧 Requirements
-Python 3.8+  
-Chrome Browser  
-Stable internet connection  
-Account for captcha resolution (CapSolver)
+## Setup
 
-## 📦 Dependencies
-selenium  
-undetected_chromedriver  
-curl_cffi  
-python-dotenv
-
-## ⚙️ Configuration
-1. Clone the repository:
 ```bash
-git clone https://github.com/tuousername/Checkout-bot-Card-Collection.git
+git clone https://github.com/<your-user>/Checkout-bot-Card-Collection.git
 cd Checkout-bot-Card-Collection
-```
 
-2. Install the dependencies:
-```bash
 pip install -r requirements.txt
+patchright install chromium
 ```
 
-3. Configure the environment variables:
-```
-ROOT_PATH=/path/to/your/project
-TOYS_CENTER_KEY=0x4AAAAAAA_slGZ9sK4UREXX
-```
+Copy `.env.example` to `.env` and fill in real values:
 
-4. Configure `settings.json` with your CapSolver API key:
-```json
-{
-    "CAPSOLVER_API_KEY": "YOUR_API_KEY"
-}
-```
-
-5. Configure the details of the products to monitor in `tasks/toyscenter.csv` and the data.
-
-## 🚀 Usage
-Run the main pipeline:
 ```bash
-python ToysCenter/pipeline.py
+cp .env.example .env
 ```
 
-## 🔄 Operating Process
-1. Monitoring: The bot periodically checks the availability of the specified product.
-2. Add to cart: When the product becomes available, it is added to the cart.
-3. Data filling: User data is automatically filled in the forms.
-4. Payment: Payment data is entered and the transaction is completed.
-5. Confirmation: The bot waits for order confirmation.
+```
+TOYS_CENTER_KEY=0x4AAAAAAA_slGZ9sK4UREXX
+CAPSOLVER_API_KEY=your-capsolver-api-key
+```
 
-## 🧵 Threading Functionality
-The bot implements an advanced multi-threading system that allows:
+Fill `tasks/toyscenter.csv` with one row per checkout attempt. Required columns: `product_link`, `email`, `surname`, `address_line_1`, `city`, `state`, `zipcode`, `titolare_carta`, `numero_carta`, `scadenza_carta` (MM/YY), `cvv`.
 
-- Monitoring multiple sites or products simultaneously
-- Configuring the maximum number of simultaneous threads (default: 10)
-- Automatically managing thread startup and termination
-- Coordinating parallel purchase operations on different products
-- Automatically restarting the process in case of errors
+## Run
 
-Each row in the task CSV file is executed in a separate thread, allowing you to monitor and purchase multiple products from different sites simultaneously, thus maximizing the chances of success during limited product launches.
+```bash
+python -m checkout_bot
+```
 
-## ⚠️ Legal Notes
-This project was created for educational purposes only. The use of bots for automated purchases may violate the terms of service of some websites. The author assumes no responsibility for any violations or consequences arising from the use of this software.
+Each CSV row spawns a concurrent task (bounded by `max_concurrency`, default 10). Tasks retry automatically every `restart_delay_seconds` on failure until they succeed or you interrupt with Ctrl-C.
+
+## Configuration knobs
+
+`AppSettings` (`checkout_bot/config/settings.py`) exposes:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `max_concurrency` | 10 | Concurrent in-flight checkouts |
+| `refresh_interval_seconds` | 2.0 | Product availability poll cadence |
+| `restart_delay_seconds` | 10.0 | Delay before retrying a failed attempt |
+| `headless` | False | Run Chromium headless |
+| `log_level` | INFO | Standard logging level |
+| `payment_confirmation_timeout_seconds` | 60 | How long to wait for "Grazie per il tuo ordine" |
+| `captcha_poll_max_attempts` | 60 | Max polls before giving up on CapSolver |
+| `captcha_poll_interval_seconds` | 2.0 | CapSolver poll cadence |
+
+## Troubleshooting
+
+### `BrowserType.launch: Executable doesn't exist at …/ms-playwright/chromium-XXXX/…`
+
+patchright can't find the Chromium binary. This happens on a fresh checkout, after a patchright upgrade, or inside a new virtualenv. Install the browser into the active environment:
+
+```bash
+patchright install chromium
+```
+
+If you're using a virtualenv, make sure you run the command with that venv active (or invoke it explicitly, e.g. `.venv/bin/patchright install chromium`). Then re-run `python -m checkout_bot`.
+
+## Security note
+
+Credit-card data and emails live in `tasks/toyscenter.csv` in plain text. Treat the file as a secret — do not commit it.
+
+## Legal
+
+For educational purposes only. Automated purchasing may violate site terms of service. The author assumes no responsibility for any consequences of using this software.
